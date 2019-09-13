@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//      https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -38,7 +38,7 @@
 #define VERSYM_VERSION 0x7fff
 
 namespace absl {
-namespace debug_internal {
+namespace debugging_internal {
 
 namespace {
 
@@ -75,8 +75,9 @@ const T *GetTableElement(const ElfW(Ehdr) * ehdr, ElfW(Off) table_offset,
 
 }  // namespace
 
-const void *const ElfMemImage::kInvalidBase =
-    reinterpret_cast<const void *>(~0L);
+// The value of this variable doesn't matter; it's used only for its
+// unique address.
+const int ElfMemImage::kInvalidBaseSentinel = 0;
 
 ElfMemImage::ElfMemImage(const void *base) {
   ABSL_RAW_CHECK(base != kInvalidBase, "bad pointer");
@@ -120,7 +121,7 @@ const void *ElfMemImage::GetSymAddr(const ElfW(Sym) *sym) const {
     return reinterpret_cast<const void *>(sym->st_value);
   }
   ABSL_RAW_CHECK(link_base_ < sym->st_value, "symbol out of range");
-  return GetTableElement<char>(ehdr_, 0, 1, sym->st_value) - link_base_;
+  return GetTableElement<char>(ehdr_, 0, 1, sym->st_value - link_base_);
 }
 
 const ElfW(Verdef) *ElfMemImage::GetVerdef(int index) const {
@@ -160,10 +161,6 @@ void ElfMemImage::Init(const void *base) {
   if (!base) {
     return;
   }
-  const intptr_t base_as_uintptr_t = reinterpret_cast<uintptr_t>(base);
-  // Fake VDSO has low bit set.
-  const bool fake_vdso = ((base_as_uintptr_t & 1) != 0);
-  base = reinterpret_cast<const void *>(base_as_uintptr_t & ~1);
   const char *const base_as_char = reinterpret_cast<const char *>(base);
   if (base_as_char[EI_MAG0] != ELFMAG0 || base_as_char[EI_MAG1] != ELFMAG1 ||
       base_as_char[EI_MAG2] != ELFMAG2 || base_as_char[EI_MAG3] != ELFMAG3) {
@@ -223,21 +220,7 @@ void ElfMemImage::Init(const void *base) {
       reinterpret_cast<ElfW(Dyn) *>(dynamic_program_header->p_vaddr +
                                     relocation);
   for (; dynamic_entry->d_tag != DT_NULL; ++dynamic_entry) {
-    ElfW(Xword) value = dynamic_entry->d_un.d_val;
-    if (fake_vdso) {
-      // A complication: in the real VDSO, dynamic entries are not relocated
-      // (it wasn't loaded by a dynamic loader). But when testing with a
-      // "fake" dlopen()ed vdso library, the loader relocates some (but
-      // not all!) of them before we get here.
-      if (dynamic_entry->d_tag == DT_VERDEF) {
-        // The only dynamic entry (of the ones we care about) libc-2.3.6
-        // loader doesn't relocate.
-        value += relocation;
-      }
-    } else {
-      // Real VDSO. Everything needs to be relocated.
-      value += relocation;
-    }
+    const ElfW(Xword) value = dynamic_entry->d_un.d_val + relocation;
     switch (dynamic_entry->d_tag) {
       case DT_HASH:
         hash_ = reinterpret_cast<ElfW(Word) *>(value);
@@ -391,7 +374,7 @@ void ElfMemImage::SymbolIterator::Update(int increment) {
   info_.symbol  = symbol;
 }
 
-}  // namespace debug_internal
+}  // namespace debugging_internal
 }  // namespace absl
 
 #endif  // ABSL_HAVE_ELF_MEM_IMAGE

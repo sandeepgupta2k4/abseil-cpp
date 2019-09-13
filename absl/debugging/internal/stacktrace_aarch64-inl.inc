@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <iostream>
 
+#include "absl/base/attributes.h"
 #include "absl/debugging/internal/address_is_readable.h"
 #include "absl/debugging/internal/vdso_support.h"  // a no-op on non-elf or non-glibc systems
 #include "absl/debugging/stacktrace.h"
@@ -24,7 +25,7 @@ static const uintptr_t kUnknownFrameSize = 0;
 // Returns the address of the VDSO __kernel_rt_sigreturn function, if present.
 static const unsigned char* GetKernelRtSigreturnAddress() {
   constexpr uintptr_t kImpossibleAddress = 1;
-  static std::atomic<uintptr_t> memoized{kImpossibleAddress};
+  ABSL_CONST_INIT static std::atomic<uintptr_t> memoized{kImpossibleAddress};
   uintptr_t address = memoized.load(std::memory_order_relaxed);
   if (address != kImpossibleAddress) {
     return reinterpret_cast<const unsigned char*>(address);
@@ -33,9 +34,9 @@ static const unsigned char* GetKernelRtSigreturnAddress() {
   address = reinterpret_cast<uintptr_t>(nullptr);
 
 #ifdef ABSL_HAVE_VDSO_SUPPORT
-  absl::debug_internal::VDSOSupport vdso;
+  absl::debugging_internal::VDSOSupport vdso;
   if (vdso.IsPresent()) {
-    absl::debug_internal::VDSOSupport::SymbolInfo symbol_info;
+    absl::debugging_internal::VDSOSupport::SymbolInfo symbol_info;
     if (!vdso.LookupSymbol("__kernel_rt_sigreturn", "LINUX_2.6.39", STT_FUNC,
                            &symbol_info) ||
         symbol_info.address == nullptr) {
@@ -90,7 +91,7 @@ static void **NextStackFrame(void **old_frame_pointer, const void *uc) {
       // Check that alleged frame pointer is actually readable. This is to
       // prevent "double fault" in case we hit the first fault due to e.g.
       // stack corruption.
-      if (!absl::debug_internal::AddressIsReadable(
+      if (!absl::debugging_internal::AddressIsReadable(
               pre_signal_frame_pointer))
         return nullptr;
 
@@ -177,5 +178,13 @@ static int UnwindImpl(void** result, int* sizes, int max_depth, int skip_count,
   }
   return n;
 }
+
+namespace absl {
+namespace debugging_internal {
+bool StackTraceWorksForTest() {
+  return true;
+}
+}  // namespace debugging_internal
+}  // namespace absl
 
 #endif  // ABSL_DEBUGGING_INTERNAL_STACKTRACE_AARCH64_INL_H_

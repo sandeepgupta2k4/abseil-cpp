@@ -1,4 +1,20 @@
+// Copyright 2017 The Abseil Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "absl/time/clock.h"
+
+#include "absl/base/attributes.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -41,10 +57,8 @@ Time Now() {
 #endif
 #endif
 
-#if defined(__APPLE__)
-#include "absl/time/internal/get_current_time_ios.inc"
-#elif defined(_WIN32)
-#include "absl/time/internal/get_current_time_windows.inc"
+#if defined(__APPLE__) || defined(_WIN32)
+#include "absl/time/internal/get_current_time_chrono.inc"
 #else
 #include "absl/time/internal/get_current_time_posix.inc"
 #endif
@@ -365,7 +379,7 @@ static uint64_t UpdateLastSample(
 //
 // Manually mark this 'noinline' to minimize stack frame size of the fast
 // path.  Without this, sometimes a compiler may inline this big block of code
-// into the fast past.  That causes lots of register spills and reloads that
+// into the fast path.  That causes lots of register spills and reloads that
 // are unnecessary unless the slow path is taken.
 //
 // TODO(absl-team): Remove this attribute when our compiler is smart enough
@@ -510,7 +524,7 @@ namespace {
 // Returns the maximum duration that SleepOnce() can sleep for.
 constexpr absl::Duration MaxSleep() {
 #ifdef _WIN32
-  // Windows _sleep() takes unsigned long argument in milliseconds.
+  // Windows Sleep() takes unsigned long argument in milliseconds.
   return absl::Milliseconds(
       std::numeric_limits<unsigned long>::max());  // NOLINT(runtime/int)
 #else
@@ -522,7 +536,7 @@ constexpr absl::Duration MaxSleep() {
 // REQUIRES: to_sleep <= MaxSleep().
 void SleepOnce(absl::Duration to_sleep) {
 #ifdef _WIN32
-  _sleep(to_sleep / absl::Milliseconds(1));
+  Sleep(to_sleep / absl::Milliseconds(1));
 #else
   struct timespec sleep_time = absl::ToTimespec(to_sleep);
   while (nanosleep(&sleep_time, &sleep_time) != 0 && errno == EINTR) {

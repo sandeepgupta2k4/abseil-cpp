@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//      https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,7 +19,9 @@
 #include <cstring>
 
 #include "absl/base/internal/raw_logging.h"
-#include "cctz/zone_info_source.h"
+#include "absl/time/internal/cctz/include/cctz/zone_info_source.h"
+
+namespace cctz = absl::time_internal::cctz;
 
 namespace absl {
 namespace time_internal {
@@ -33,6 +35,8 @@ TimeZone LoadTimeZone(const std::string& name) {
 }  // namespace time_internal
 }  // namespace absl
 
+namespace absl {
+namespace time_internal {
 namespace cctz_extension {
 namespace {
 
@@ -63,7 +67,7 @@ const struct ZoneInfo {
     {"US/Pacific",  //
      reinterpret_cast<char*>(America_Los_Angeles), America_Los_Angeles_len},
 
-    // Allows use of the local time zone from a common system-specific location.
+    // Allows use of the local time zone from a system-specific location.
 #ifdef _MSC_VER
     {"localtime",  //
      reinterpret_cast<char*>(America_Los_Angeles), America_Los_Angeles_len},
@@ -115,3 +119,5 @@ std::unique_ptr<cctz::ZoneInfoSource> TestFactory(
 ZoneInfoSourceFactory zone_info_source_factory = TestFactory;
 
 }  // namespace cctz_extension
+}  // namespace time_internal
+}  // namespace absl

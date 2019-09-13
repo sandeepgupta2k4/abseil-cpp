@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//      https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -49,6 +49,10 @@
 //
 // Arithmetic overflows/underflows to +/- infinity and saturates.
 
+#if defined(_MSC_VER)
+#include <winsock2.h>  // for timeval
+#endif
+
 #include <algorithm>
 #include <cassert>
 #include <cctype>
@@ -62,6 +66,7 @@
 #include <limits>
 #include <string>
 
+#include "absl/base/casts.h"
 #include "absl/numeric/int128.h"
 #include "absl/time/time.h"
 
@@ -77,8 +82,14 @@ constexpr int64_t kint64min = std::numeric_limits<int64_t>::min();
 
 // Can't use std::isinfinite() because it doesn't exist on windows.
 inline bool IsFinite(double d) {
+  if (std::isnan(d)) return false;
   return d != std::numeric_limits<double>::infinity() &&
          d != -std::numeric_limits<double>::infinity();
+}
+
+inline bool IsValidDivisor(double d) {
+  if (std::isnan(d)) return false;
+  return d != 0.0;
 }
 
 // Can't use std::round() because it is only available in C++11.
@@ -165,14 +176,18 @@ inline Duration MakeDurationFromU128(uint128 u128, bool is_neg) {
   return time_internal::MakeDuration(rep_hi, rep_lo);
 }
 
-// Convert int64_t to uint64_t in twos-complement system.
-inline uint64_t EncodeTwosComp(int64_t v) { return static_cast<uint64_t>(v); }
-
-// Convert uint64_t to int64_t in twos-complement system.
-inline int64_t DecodeTwosComp(uint64_t v) {
-  if (v <= kint64max) return static_cast<int64_t>(v);
-  return static_cast<int64_t>(v - kint64max - 1) + kint64min;
+// Convert between int64_t and uint64_t, preserving representation. This
+// allows us to do arithmetic in the unsigned domain, where overflow has
+// well-defined behavior. See operator+=() and operator-=().
+//
+// C99 7.20.1.1.1, as referenced by C++11 18.4.1.2, says, "The typedef
+// name intN_t designates a signed integer type with width N, no padding
+// bits, and a two's complement representation." So, we can convert to
+// and from the corresponding uint64_t value using a bit cast.
+inline uint64_t EncodeTwosComp(int64_t v) {
+  return absl::bit_cast<uint64_t>(v);
 }
+inline int64_t DecodeTwosComp(uint64_t v) { return absl::bit_cast<int64_t>(v); }
 
 // Note: The overflow detection in this function is done using greater/less *or
 // equal* because kint64max/min is too large to be represented exactly in a
@@ -450,7 +465,7 @@ Duration& Duration::operator/=(int64_t r) {
 }
 
 Duration& Duration::operator/=(double r) {
-  if (time_internal::IsInfiniteDuration(*this) || r == 0.0) {
+  if (time_internal::IsInfiniteDuration(*this) || !IsValidDivisor(r)) {
     const bool is_neg = (std::signbit(r) != 0) != (rep_hi_ < 0);
     return *this = is_neg ? -InfiniteDuration() : InfiniteDuration();
   }
@@ -661,7 +676,7 @@ std::chrono::hours ToChronoHours(Duration d) {
 }
 
 //
-// To/From std::string formatting.
+// To/From string formatting.
 //
 
 namespace {
@@ -672,7 +687,7 @@ namespace {
 char* Format64(char* ep, int width, int64_t v) {
   do {
     --width;
-    *--ep = "0123456789"[v % 10];
+    *--ep = '0' + (v % 10);  // contiguous digits
   } while (v /= 10);
   while (--width >= 0) *--ep = '0';  // zero pad
   return ep;
@@ -738,9 +753,9 @@ void AppendNumberUnit(std::string* out, double n, DisplayUnit unit) {
 
 }  // namespace
 
-// From Go's doc at http://golang.org/pkg/time/#Duration.String
-//   [FormatDuration] returns a std::string representing the duration in the
-//   form "72h3m0.5s".  Leading zero units are omitted.  As a special
+// From Go's doc at https://golang.org/pkg/time/#Duration.String
+//   [FormatDuration] returns a string representing the duration in the
+//   form "72h3m0.5s". Leading zero units are omitted.  As a special
 //   case, durations less than one second format use a smaller unit
 //   (milli-, micro-, or nanoseconds) to ensure that the leading digit
 //   is non-zero.  The zero duration formats as 0, with no unit.
@@ -782,20 +797,37 @@ std::string FormatDuration(Duration d) {
 namespace {
 
 // A helper for ParseDuration() that parses a leading number from the given
-// std::string and stores the result in *n.  The given std::string pointer is modified
-// to point to the first unconsumed char.
-bool ConsumeDurationNumber(const char** start, double* n) {
-  const char* s = *start;
-  char* end = nullptr;
-  errno = 0;
-  *n = strtod(s, &end);
-  *start = end;
-  return !std::isspace(*s) && errno == 0 && end != s && *n >= 0;
+// string and stores the result in *int_part/*frac_part/*frac_scale.  The
+// given string pointer is modified to point to the first unconsumed char.
+bool ConsumeDurationNumber(const char** dpp, int64_t* int_part,
+                           int64_t* frac_part, int64_t* frac_scale) {
+  *int_part = 0;
+  *frac_part = 0;
+  *frac_scale = 1;  // invariant: *frac_part < *frac_scale
+  const char* start = *dpp;
+  for (; std::isdigit(**dpp); *dpp += 1) {
+    const int d = **dpp - '0';  // contiguous digits
+    if (*int_part > kint64max / 10) return false;
+    *int_part *= 10;
+    if (*int_part > kint64max - d) return false;
+    *int_part += d;
+  }
+  const bool int_part_empty = (*dpp == start);
+  if (**dpp != '.') return !int_part_empty;
+  for (*dpp += 1; std::isdigit(**dpp); *dpp += 1) {
+    const int d = **dpp - '0';  // contiguous digits
+    if (*frac_scale <= kint64max / 10) {
+      *frac_part *= 10;
+      *frac_part += d;
+      *frac_scale *= 10;
+    }
+  }
+  return !int_part_empty || *frac_scale != 1;
 }
 
 // A helper for ParseDuration() that parses a leading unit designator (e.g.,
-// ns, us, ms, s, m, h) from the given std::string and stores the resulting unit
-// in "*unit".  The given std::string pointer is modified to point to the first
+// ns, us, ms, s, m, h) from the given string and stores the resulting unit
+// in "*unit".  The given string pointer is modified to point to the first
 // unconsumed char.
 bool ConsumeDurationUnit(const char** start, Duration* unit) {
   const char *s = *start;
@@ -827,8 +859,8 @@ bool ConsumeDurationUnit(const char** start, Duration* unit) {
 
 }  // namespace
 
-// From Go's doc at http://golang.org/pkg/time/#ParseDuration
-//   [ParseDuration] parses a duration std::string.  A duration std::string is
+// From Go's doc at https://golang.org/pkg/time/#ParseDuration
+//   [ParseDuration] parses a duration string. A duration string is
 //   a possibly signed sequence of decimal numbers, each with optional
 //   fraction and a unit suffix, such as "300ms", "-1.5h" or "2h45m".
 //   Valid time units are "ns", "us" "ms", "s", "m", "h".
@@ -859,25 +891,25 @@ bool ParseDuration(const std::string& dur_string, Duration* d) {
 
   Duration dur;
   while (*start != '\0') {
-    double n = 0;
+    int64_t int_part;
+    int64_t frac_part;
+    int64_t frac_scale;
     Duration unit;
-    if (!ConsumeDurationNumber(&start, &n) ||
+    if (!ConsumeDurationNumber(&start, &int_part, &frac_part, &frac_scale) ||
         !ConsumeDurationUnit(&start, &unit)) {
       return false;
     }
-    dur += sign * n * unit;
+    if (int_part != 0) dur += sign * int_part * unit;
+    if (frac_part != 0) dur += sign * frac_part * unit / frac_scale;
   }
   *d = dur;
   return true;
 }
 
-// TODO(absl-team): Remove once dependencies are removed.
-bool ParseFlag(const std::string& text, Duration* dst, std::string* /* err */) {
+bool ParseFlag(const std::string& text, Duration* dst, std::string* ) {
   return ParseDuration(text, dst);
 }
 
-std::string UnparseFlag(Duration d) {
-  return FormatDuration(d);
-}
+std::string UnparseFlag(Duration d) { return FormatDuration(d); }
 
 }  // namespace absl

@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//      https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,7 +21,6 @@
 #include <atomic>
 
 #include "absl/base/attributes.h"
-#include "absl/base/internal/malloc_extension.h"
 #include "absl/base/internal/thread_identity.h"
 #include "absl/synchronization/internal/waiter.h"
 
@@ -91,11 +90,6 @@ ABSL_ATTRIBUTE_WEAK bool AbslInternalPerThreadSemWait(
     identity->blocked_count_ptr->fetch_sub(1, std::memory_order_relaxed);
   }
 
-  if (identity->is_idle.load(std::memory_order_relaxed)) {
-    // We became idle during the wait; become non-idle again so that
-    // performance of deallocations done from now on does not suffer.
-    absl::base_internal::MallocExtension::instance()->MarkThreadBusy();
-  }
   identity->is_idle.store(false, std::memory_order_relaxed);
   identity->wait_start.store(0, std::memory_order_relaxed);
   return !timeout;

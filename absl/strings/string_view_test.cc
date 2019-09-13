@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//      https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -29,6 +29,17 @@
 #include "absl/base/config.h"
 #include "absl/base/dynamic_annotations.h"
 
+#if defined(ABSL_HAVE_STD_STRING_VIEW) || defined(__ANDROID__)
+// We don't control the death messaging when using std::string_view.
+// Android assert messages only go to system log, so death tests cannot inspect
+// the message for matching.
+#define ABSL_EXPECT_DEATH_IF_SUPPORTED(statement, regex) \
+  EXPECT_DEATH_IF_SUPPORTED(statement, ".*")
+#else
+#define ABSL_EXPECT_DEATH_IF_SUPPORTED(statement, regex) \
+  EXPECT_DEATH_IF_SUPPORTED(statement, regex)
+#endif
+
 namespace {
 
 // A minimal allocator that uses malloc().
@@ -50,6 +61,8 @@ struct Mallocator {
     typedef Mallocator<U> other;
   };
   Mallocator() = default;
+  template <class U>
+  Mallocator(const Mallocator<U>&) {}  // NOLINT(runtime/explicit)
 
   T* allocate(size_t n) { return static_cast<T*>(std::malloc(n * sizeof(T))); }
   void deallocate(T* p, size_t) { std::free(p); }
@@ -272,9 +285,10 @@ TEST(StringViewTest, ComparisonOperatorsByCharacterPosition) {
 }
 #undef COMPARE
 
-// Sadly, our users often confuse std::string::npos with absl::string_view::npos;
-// So much so that we test here that they are the same.  They need to
-// both be unsigned, and both be the maximum-valued integer of their type.
+// Sadly, our users often confuse std::string::npos with
+// absl::string_view::npos; So much so that we test here that they are the same.
+// They need to both be unsigned, and both be the maximum-valued integer of
+// their type.
 
 template <typename T>
 struct is_type {
@@ -356,6 +370,11 @@ TEST(StringViewTest, STL1) {
   EXPECT_EQ(buf[1], c[1]);
   EXPECT_EQ(buf[2], c[2]);
   EXPECT_EQ(buf[3], a[3]);
+#ifdef ABSL_HAVE_EXCEPTIONS
+  EXPECT_THROW(a.copy(buf, 1, 27), std::out_of_range);
+#else
+  ABSL_EXPECT_DEATH_IF_SUPPORTED(a.copy(buf, 1, 27), "absl::string_view::copy");
+#endif
 }
 
 // Separated from STL1() because some compilers produce an overly
@@ -666,9 +685,10 @@ TEST(StringViewTest, STL2Substr) {
   EXPECT_EQ(a.substr(23, absl::string_view::npos), c);
   // throw exception
 #ifdef ABSL_HAVE_EXCEPTIONS
-  EXPECT_THROW(a.substr(99, 2), std::out_of_range);
+  EXPECT_THROW((void)a.substr(99, 2), std::out_of_range);
 #else
-  EXPECT_DEATH(a.substr(99, 2), "absl::string_view::substr");
+  ABSL_EXPECT_DEATH_IF_SUPPORTED((void)a.substr(99, 2),
+                                 "absl::string_view::substr");
 #endif
 }
 
@@ -684,8 +704,11 @@ TEST(StringViewTest, TruncSubstr) {
 }
 
 TEST(StringViewTest, UTF8) {
-  EXPECT_EQ(strlen("á"), absl::string_view("á á").find_first_of(" "));
-  EXPECT_EQ(strlen("á"), absl::string_view("á á").find_first_of(" \t"));
+  std::string utf8 = "\u00E1";
+  std::string utf8_twice = utf8 + " " + utf8;
+  int utf8_len = strlen(utf8.data());
+  EXPECT_EQ(utf8_len, absl::string_view(utf8_twice).find_first_of(" "));
+  EXPECT_EQ(utf8_len, absl::string_view(utf8_twice).find_first_of(" \t"));
 }
 
 TEST(StringViewTest, FindConformance) {
@@ -740,7 +763,6 @@ TEST(StringViewTest, Remove) {
   std::string s1("123");
   s1 += '\0';
   s1 += "456";
-  absl::string_view b(s1);
   absl::string_view e;
   std::string s2;
 
@@ -796,11 +818,30 @@ TEST(StringViewTest, FrontBackSingleChar) {
   EXPECT_EQ(&c, &csp.back());
 }
 
+// `std::string_view::string_view(const char*)` calls
+// `std::char_traits<char>::length(const char*)` to get the string length. In
+// libc++, it doesn't allow `nullptr` in the constexpr context, with the error
+// "read of dereferenced null pointer is not allowed in a constant expression".
+// At run time, the behavior of `std::char_traits::length()` on `nullptr` is
+// undefined by the standard and usually results in crash with libc++.
+// GCC also started rejected this in libstdc++ starting in GCC9.
+// In MSVC, creating a constexpr string_view from nullptr also triggers an
+// "unevaluable pointer value" error. This compiler implementation conforms
+// to the standard, but `absl::string_view` implements a different
+// behavior for historical reasons. We work around tests that construct
+// `string_view` from `nullptr` when using libc++.
+#if !defined(ABSL_HAVE_STD_STRING_VIEW) ||                    \
+    (!(defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE >= 9) && \
+     !defined(_LIBCPP_VERSION) && !defined(_MSC_VER))
+#define ABSL_HAVE_STRING_VIEW_FROM_NULLPTR 1
+#endif
+
 TEST(StringViewTest, NULLInput) {
   absl::string_view s;
   EXPECT_EQ(s.data(), nullptr);
   EXPECT_EQ(s.size(), 0);
 
+#ifdef ABSL_HAVE_STRING_VIEW_FROM_NULLPTR
   s = absl::string_view(nullptr);
   EXPECT_EQ(s.data(), nullptr);
   EXPECT_EQ(s.size(), 0);
@@ -808,6 +849,7 @@ TEST(StringViewTest, NULLInput) {
   // .ToString() on a absl::string_view with nullptr should produce the empty
   // std::string.
   EXPECT_EQ("", std::string(s));
+#endif  // ABSL_HAVE_STRING_VIEW_FROM_NULLPTR
 }
 
 TEST(StringViewTest, Comparisons2) {
@@ -854,6 +896,18 @@ TEST(StringViewTest, Comparisons2) {
   EXPECT_LT(digits.compare(0, npos, "0123456789", 3, 5), 0);  // 6
 }
 
+TEST(StringViewTest, At) {
+  absl::string_view abc = "abc";
+  EXPECT_EQ(abc.at(0), 'a');
+  EXPECT_EQ(abc.at(1), 'b');
+  EXPECT_EQ(abc.at(2), 'c');
+#ifdef ABSL_HAVE_EXCEPTIONS
+  EXPECT_THROW(abc.at(3), std::out_of_range);
+#else
+  ABSL_EXPECT_DEATH_IF_SUPPORTED(abc.at(3), "absl::string_view::at");
+#endif
+}
+
 struct MyCharAlloc : std::allocator<char> {};
 
 TEST(StringViewTest, ExplicitConversionOperator) {
@@ -879,7 +933,9 @@ TEST(StringViewTest, NullSafeStringView) {
 
 TEST(StringViewTest, ConstexprCompiles) {
   constexpr absl::string_view sp;
+#ifdef ABSL_HAVE_STRING_VIEW_FROM_NULLPTR
   constexpr absl::string_view cstr(nullptr);
+#endif
   constexpr absl::string_view cstr_len("cstr", 4);
 
 #if defined(ABSL_HAVE_STD_STRING_VIEW)
@@ -906,6 +962,11 @@ TEST(StringViewTest, ConstexprCompiles) {
 #error GCC/clang should have constexpr string_view.
 #endif
 
+// MSVC 2017+ should be able to construct a constexpr string_view from a cstr.
+#if defined(_MSC_VER) && _MSC_VER >= 1910
+#define ABSL_HAVE_CONSTEXPR_STRING_VIEW_FROM_CSTR 1
+#endif
+
 #endif  // ABSL_HAVE_STD_STRING_VIEW
 
 #ifdef ABSL_HAVE_CONSTEXPR_STRING_VIEW_FROM_CSTR
@@ -922,14 +983,28 @@ TEST(StringViewTest, ConstexprCompiles) {
   constexpr absl::string_view::iterator const_begin_empty = sp.begin();
   constexpr absl::string_view::iterator const_end_empty = sp.end();
   EXPECT_EQ(const_begin_empty, const_end_empty);
-#endif
+
+#ifdef ABSL_HAVE_STRING_VIEW_FROM_NULLPTR
+  constexpr absl::string_view::iterator const_begin_nullptr = cstr.begin();
+  constexpr absl::string_view::iterator const_end_nullptr = cstr.end();
+  EXPECT_EQ(const_begin_nullptr, const_end_nullptr);
+#endif  // ABSL_HAVE_STRING_VIEW_FROM_NULLPTR
+#endif  // !defined(__clang__) || ...
 
   constexpr absl::string_view::iterator const_begin = cstr_len.begin();
   constexpr absl::string_view::iterator const_end = cstr_len.end();
   constexpr absl::string_view::size_type const_size = cstr_len.size();
   constexpr absl::string_view::size_type const_length = cstr_len.length();
+  static_assert(const_begin + const_size == const_end,
+                "pointer arithmetic check");
+  static_assert(const_begin + const_length == const_end,
+                "pointer arithmetic check");
+#ifndef _MSC_VER
+  // MSVC has bugs doing constexpr pointer arithmetic.
+  // https://developercommunity.visualstudio.com/content/problem/482192/bad-pointer-arithmetic-in-constepxr-2019-rc1-svc1.html
   EXPECT_EQ(const_begin + const_size, const_end);
   EXPECT_EQ(const_begin + const_length, const_end);
+#endif
 
   constexpr bool isempty = sp.empty();
   EXPECT_TRUE(isempty);
@@ -954,8 +1029,8 @@ TEST(StringViewTest, ConstexprCompiles) {
 TEST(StringViewTest, Noexcept) {
   EXPECT_TRUE((std::is_nothrow_constructible<absl::string_view,
                                              const std::string&>::value));
-  EXPECT_TRUE(
-      (std::is_nothrow_constructible<absl::string_view, const std::string&>::value));
+  EXPECT_TRUE((std::is_nothrow_constructible<absl::string_view,
+                                             const std::string&>::value));
   EXPECT_TRUE(std::is_nothrow_constructible<absl::string_view>::value);
   constexpr absl::string_view sp;
   EXPECT_TRUE(noexcept(sp.begin()));
@@ -1038,11 +1113,23 @@ TEST(HugeStringView, TwoPointTwoGB) {
 }
 #endif  // THREAD_SANITIZER
 
-#ifndef NDEBUG
+#if !defined(NDEBUG) && !defined(ABSL_HAVE_STD_STRING_VIEW)
 TEST(NonNegativeLenTest, NonNegativeLen) {
-  EXPECT_DEATH_IF_SUPPORTED(absl::string_view("xyz", -1), "len <= kMaxSize");
+  ABSL_EXPECT_DEATH_IF_SUPPORTED(absl::string_view("xyz", -1),
+                                 "len <= kMaxSize");
 }
-#endif  // NDEBUG
+
+TEST(LenExceedsMaxSizeTest, LenExceedsMaxSize) {
+  auto max_size = absl::string_view().max_size();
+
+  // This should construct ok (although the view itself is obviously invalid).
+  absl::string_view ok_view("", max_size);
+
+  // Adding one to the max should trigger an assertion.
+  ABSL_EXPECT_DEATH_IF_SUPPORTED(absl::string_view("", max_size + 1),
+                                 "len <= kMaxSize");
+}
+#endif  // !defined(NDEBUG) && !defined(ABSL_HAVE_STD_STRING_VIEW)
 
 class StringViewStreamTest : public ::testing::Test {
  public:

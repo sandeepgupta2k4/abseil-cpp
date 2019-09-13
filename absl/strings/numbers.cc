@@ -1,4 +1,18 @@
-// This file contains std::string processing functions related to
+// Copyright 2017 The Abseil Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// This file contains string processing functions related to
 // numeric values.
 
 #include "absl/strings/numbers.h"
@@ -16,71 +30,69 @@
 #include <memory>
 #include <utility>
 
+#include "absl/base/internal/bits.h"
 #include "absl/base/internal/raw_logging.h"
 #include "absl/strings/ascii.h"
+#include "absl/strings/charconv.h"
 #include "absl/strings/internal/memutil.h"
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 
 namespace absl {
 
-bool SimpleAtof(absl::string_view str, float* value) {
-  *value = 0.0;
-  if (str.empty()) return false;
-  char buf[32];
-  std::unique_ptr<char[]> bigbuf;
-  char* ptr = buf;
-  if (str.size() > sizeof(buf) - 1) {
-    bigbuf.reset(new char[str.size() + 1]);
-    ptr = bigbuf.get();
+bool SimpleAtof(absl::string_view str, float* out) {
+  *out = 0.0;
+  str = StripAsciiWhitespace(str);
+  if (!str.empty() && str[0] == '+') {
+    str.remove_prefix(1);
   }
-  memcpy(ptr, str.data(), str.size());
-  ptr[str.size()] = '\0';
-
-  char* endptr;
-  *value = strtof(ptr, &endptr);
-  if (endptr != ptr) {
-    while (absl::ascii_isspace(*endptr)) ++endptr;
+  auto result = absl::from_chars(str.data(), str.data() + str.size(), *out);
+  if (result.ec == std::errc::invalid_argument) {
+    return false;
   }
-  // Ignore range errors from strtod/strtof.
-  // The values it returns on underflow and
-  // overflow are the right fallback in a
-  // robust setting.
-  return *ptr != '\0' && *endptr == '\0';
+  if (result.ptr != str.data() + str.size()) {
+    // not all non-whitespace characters consumed
+    return false;
+  }
+  // from_chars() with DR 3081's current wording will return max() on
+  // overflow.  SimpleAtof returns infinity instead.
+  if (result.ec == std::errc::result_out_of_range) {
+    if (*out > 1.0) {
+      *out = std::numeric_limits<float>::infinity();
+    } else if (*out < -1.0) {
+      *out = -std::numeric_limits<float>::infinity();
+    }
+  }
+  return true;
 }
 
-bool SimpleAtod(absl::string_view str, double* value) {
-  *value = 0.0;
-  if (str.empty()) return false;
-  char buf[32];
-  std::unique_ptr<char[]> bigbuf;
-  char* ptr = buf;
-  if (str.size() > sizeof(buf) - 1) {
-    bigbuf.reset(new char[str.size() + 1]);
-    ptr = bigbuf.get();
+bool SimpleAtod(absl::string_view str, double* out) {
+  *out = 0.0;
+  str = StripAsciiWhitespace(str);
+  if (!str.empty() && str[0] == '+') {
+    str.remove_prefix(1);
   }
-  memcpy(ptr, str.data(), str.size());
-  ptr[str.size()] = '\0';
-
-  char* endptr;
-  *value = strtod(ptr, &endptr);
-  if (endptr != ptr) {
-    while (absl::ascii_isspace(*endptr)) ++endptr;
+  auto result = absl::from_chars(str.data(), str.data() + str.size(), *out);
+  if (result.ec == std::errc::invalid_argument) {
+    return false;
   }
-  // Ignore range errors from strtod.  The values it
-  // returns on underflow and overflow are the right
-  // fallback in a robust setting.
-  return *ptr != '\0' && *endptr == '\0';
+  if (result.ptr != str.data() + str.size()) {
+    // not all non-whitespace characters consumed
+    return false;
+  }
+  // from_chars() with DR 3081's current wording will return max() on
+  // overflow.  SimpleAtod returns infinity instead.
+  if (result.ec == std::errc::result_out_of_range) {
+    if (*out > 1.0) {
+      *out = std::numeric_limits<double>::infinity();
+    } else if (*out < -1.0) {
+      *out = -std::numeric_limits<double>::infinity();
+    }
+  }
+  return true;
 }
 
 namespace {
-
-// TODO(rogeeff): replace with the real released thing once we figure out what
-// it is.
-inline bool CaseEqual(absl::string_view piece1, absl::string_view piece2) {
-  return (piece1.size() == piece2.size() &&
-          0 == strings_internal::memcasecmp(piece1.data(), piece2.data(),
-                                            piece1.size()));
-}
 
 // Writes a two-character representation of 'i' to 'buf'. 'i' must be in the
 // range 0 <= i < 100, and buf must have space for two characters. Example:
@@ -117,37 +129,33 @@ inline void PutTwoDigits(size_t i, char* buf) {
 
 }  // namespace
 
-bool SimpleAtob(absl::string_view str, bool* value) {
-  ABSL_RAW_CHECK(value != nullptr, "Output pointer must not be nullptr.");
-  if (CaseEqual(str, "true") || CaseEqual(str, "t") ||
-      CaseEqual(str, "yes") || CaseEqual(str, "y") ||
-      CaseEqual(str, "1")) {
-    *value = true;
+bool SimpleAtob(absl::string_view str, bool* out) {
+  ABSL_RAW_CHECK(out != nullptr, "Output pointer must not be nullptr.");
+  if (EqualsIgnoreCase(str, "true") || EqualsIgnoreCase(str, "t") ||
+      EqualsIgnoreCase(str, "yes") || EqualsIgnoreCase(str, "y") ||
+      EqualsIgnoreCase(str, "1")) {
+    *out = true;
     return true;
   }
-  if (CaseEqual(str, "false") || CaseEqual(str, "f") ||
-      CaseEqual(str, "no") || CaseEqual(str, "n") ||
-      CaseEqual(str, "0")) {
-    *value = false;
+  if (EqualsIgnoreCase(str, "false") || EqualsIgnoreCase(str, "f") ||
+      EqualsIgnoreCase(str, "no") || EqualsIgnoreCase(str, "n") ||
+      EqualsIgnoreCase(str, "0")) {
+    *out = false;
     return true;
   }
   return false;
 }
 
 // ----------------------------------------------------------------------
-// FastInt32ToBuffer()
-// FastUInt32ToBuffer()
-// FastInt64ToBuffer()
-// FastUInt64ToBuffer()
+// FastIntToBuffer() overloads
 //
 // Like the Fast*ToBuffer() functions above, these are intended for speed.
 // Unlike the Fast*ToBuffer() functions, however, these functions write
-// their output to the beginning of the buffer (hence the name, as the
-// output is left-aligned).  The caller is responsible for ensuring that
-// the buffer has enough space to hold the output.
+// their output to the beginning of the buffer.  The caller is responsible
+// for ensuring that the buffer has enough space to hold the output.
 //
-// Returns a pointer to the end of the std::string (i.e. the null character
-// terminating the std::string).
+// Returns a pointer to the end of the string (i.e. the null character
+// terminating the string).
 // ----------------------------------------------------------------------
 
 namespace {
@@ -160,7 +168,7 @@ const char one_ASCII_final_digits[10][2] {
 
 }  // namespace
 
-char* numbers_internal::FastUInt32ToBuffer(uint32_t i, char* buffer) {
+char* numbers_internal::FastIntToBuffer(uint32_t i, char* buffer) {
   uint32_t digits;
   // The idea of this implementation is to trim the number of divides to as few
   // as possible, and also reducing memory stores and branches, by going in
@@ -230,7 +238,7 @@ char* numbers_internal::FastUInt32ToBuffer(uint32_t i, char* buffer) {
   goto lt100_000_000;
 }
 
-char* numbers_internal::FastInt32ToBuffer(int32_t i, char* buffer) {
+char* numbers_internal::FastIntToBuffer(int32_t i, char* buffer) {
   uint32_t u = i;
   if (i < 0) {
     *buffer++ = '-';
@@ -239,12 +247,12 @@ char* numbers_internal::FastInt32ToBuffer(int32_t i, char* buffer) {
     // we write the equivalent expression "0 - u" instead.
     u = 0 - u;
   }
-  return numbers_internal::FastUInt32ToBuffer(u, buffer);
+  return numbers_internal::FastIntToBuffer(u, buffer);
 }
 
-char* numbers_internal::FastUInt64ToBuffer(uint64_t i, char* buffer) {
+char* numbers_internal::FastIntToBuffer(uint64_t i, char* buffer) {
   uint32_t u32 = static_cast<uint32_t>(i);
-  if (u32 == i) return numbers_internal::FastUInt32ToBuffer(u32, buffer);
+  if (u32 == i) return numbers_internal::FastIntToBuffer(u32, buffer);
 
   // Here we know i has at least 10 decimal digits.
   uint64_t top_1to11 = i / 1000000000;
@@ -252,12 +260,12 @@ char* numbers_internal::FastUInt64ToBuffer(uint64_t i, char* buffer) {
   uint32_t top_1to11_32 = static_cast<uint32_t>(top_1to11);
 
   if (top_1to11_32 == top_1to11) {
-    buffer = numbers_internal::FastUInt32ToBuffer(top_1to11_32, buffer);
+    buffer = numbers_internal::FastIntToBuffer(top_1to11_32, buffer);
   } else {
     // top_1to11 has more than 32 bits too; print it in two steps.
     uint32_t top_8to9 = static_cast<uint32_t>(top_1to11 / 100);
     uint32_t mid_2 = static_cast<uint32_t>(top_1to11 - top_8to9 * 100);
-    buffer = numbers_internal::FastUInt32ToBuffer(top_8to9, buffer);
+    buffer = numbers_internal::FastIntToBuffer(top_8to9, buffer);
     PutTwoDigits(mid_2, buffer);
     buffer += 2;
   }
@@ -283,25 +291,13 @@ char* numbers_internal::FastUInt64ToBuffer(uint64_t i, char* buffer) {
   return buffer + 1;
 }
 
-char* numbers_internal::FastInt64ToBuffer(int64_t i, char* buffer) {
+char* numbers_internal::FastIntToBuffer(int64_t i, char* buffer) {
   uint64_t u = i;
   if (i < 0) {
     *buffer++ = '-';
     u = 0 - u;
   }
-  return numbers_internal::FastUInt64ToBuffer(u, buffer);
-}
-
-// Returns the number of leading 0 bits in a 64-bit value.
-// TODO(jorg): Replace with builtin_clzll if available.
-// Are we shipping util/bits in absl?
-static inline int CountLeadingZeros64(uint64_t n) {
-  int zeroes = 60;
-  if (n >> 32) zeroes -= 32, n >>= 32;
-  if (n >> 16) zeroes -= 16, n >>= 16;
-  if (n >> 8) zeroes -= 8, n >>= 8;
-  if (n >> 4) zeroes -= 4, n >>= 4;
-  return "\4\3\2\2\1\1\1\1\0\0\0\0\0\0\0\0"[n] + zeroes;
+  return numbers_internal::FastIntToBuffer(u, buffer);
 }
 
 // Given a 128-bit number expressed as a pair of uint64_t, high half first,
@@ -341,7 +337,7 @@ static std::pair<uint64_t, uint64_t> Mul32(std::pair<uint64_t, uint64_t> num,
   uint64_t bits128_up = (bits96_127 >> 32) + (bits64_127 < bits64_95);
   if (bits128_up == 0) return {bits64_127, bits0_63};
 
-  int shift = 64 - CountLeadingZeros64(bits128_up);
+  int shift = 64 - base_internal::CountLeadingZeros64(bits128_up);
   uint64_t lo = (bits0_63 >> shift) + (bits64_127 << (64 - shift));
   uint64_t hi = (bits64_127 >> shift) + (bits128_up << (64 - shift));
   return {hi, lo};
@@ -372,7 +368,7 @@ static std::pair<uint64_t, uint64_t> PowFive(uint64_t num, int expfive) {
       5 * 5 * 5 * 5 * 5 * 5 * 5 * 5 * 5 * 5 * 5,
       5 * 5 * 5 * 5 * 5 * 5 * 5 * 5 * 5 * 5 * 5 * 5};
   result = Mul32(result, powers_of_five[expfive & 15]);
-  int shift = CountLeadingZeros64(result.first);
+  int shift = base_internal::CountLeadingZeros64(result.first);
   if (shift != 0) {
     result.first = (result.first << shift) + (result.second >> (64 - shift));
     result.second = (result.second << shift);

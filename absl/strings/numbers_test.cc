@@ -1,4 +1,18 @@
-// This file tests std::string processing functions related to numeric values.
+// Copyright 2017 The Abseil Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// This file tests string processing functions related to numeric values.
 
 #include "absl/strings/numbers.h"
 
@@ -24,36 +38,30 @@
 #include "absl/base/internal/raw_logging.h"
 #include "absl/strings/str_cat.h"
 
-#include "absl/strings/internal/numbers_test_common.inc"
+#include "absl/strings/internal/numbers_test_common.h"
+#include "absl/strings/internal/pow10_helper.h"
 
 namespace {
 
-using absl::numbers_internal::FastInt32ToBuffer;
-using absl::numbers_internal::FastInt64ToBuffer;
-using absl::numbers_internal::FastUInt32ToBuffer;
-using absl::numbers_internal::FastUInt64ToBuffer;
-using absl::numbers_internal::kFastToBufferSize;
 using absl::numbers_internal::kSixDigitsToBufferSize;
 using absl::numbers_internal::safe_strto32_base;
 using absl::numbers_internal::safe_strto64_base;
 using absl::numbers_internal::safe_strtou32_base;
 using absl::numbers_internal::safe_strtou64_base;
 using absl::numbers_internal::SixDigitsToBuffer;
+using absl::strings_internal::Itoa;
+using absl::strings_internal::strtouint32_test_cases;
+using absl::strings_internal::strtouint64_test_cases;
 using absl::SimpleAtoi;
 using testing::Eq;
 using testing::MatchesRegex;
 
 // Number of floats to test with.
-// 10,000,000 is a reasonable default for a test that only takes a few seconds.
+// 5,000,000 is a reasonable default for a test that only takes a few seconds.
 // 1,000,000,000+ triggers checking for all possible mantissa values for
 // double-precision tests. 2,000,000,000+ triggers checking for every possible
 // single-precision float.
-#ifdef _MSC_VER
-// Use a smaller number on MSVC to avoid test time out (1 min)
 const int kFloatNumCases = 5000000;
-#else
-const int kFloatNumCases = 10000000;
-#endif
 
 // This is a slow, brute-force routine to compute the exact base-10
 // representation of a double-precision floating-point number.  It
@@ -110,62 +118,95 @@ TEST(ToString, PerfectDtoa) {
          {1e-300, 1e-200, 1e-100, 0.1, 1.0, 10.0, 1e100, 1e300}) {
       double d = multiplier * i;
       std::string s = PerfectDtoa(d);
-      EXPECT_EQ(d, strtod(s.c_str(), nullptr));
+      EXPECT_DOUBLE_EQ(d, strtod(s.c_str(), nullptr));
     }
   }
 }
 
+template <typename integer>
+struct MyInteger {
+  integer i;
+  explicit constexpr MyInteger(integer i) : i(i) {}
+  constexpr operator integer() const { return i; }
+
+  constexpr MyInteger operator+(MyInteger other) const { return i + other.i; }
+  constexpr MyInteger operator-(MyInteger other) const { return i - other.i; }
+  constexpr MyInteger operator*(MyInteger other) const { return i * other.i; }
+  constexpr MyInteger operator/(MyInteger other) const { return i / other.i; }
+
+  constexpr bool operator<(MyInteger other) const { return i < other.i; }
+  constexpr bool operator<=(MyInteger other) const { return i <= other.i; }
+  constexpr bool operator==(MyInteger other) const { return i == other.i; }
+  constexpr bool operator>=(MyInteger other) const { return i >= other.i; }
+  constexpr bool operator>(MyInteger other) const { return i > other.i; }
+  constexpr bool operator!=(MyInteger other) const { return i != other.i; }
+
+  integer as_integer() const { return i; }
+};
+
+typedef MyInteger<int64_t> MyInt64;
+typedef MyInteger<uint64_t> MyUInt64;
+
 void CheckInt32(int32_t x) {
-  char buffer[kFastInt32ToBufferSize];
-  char* actual = FastInt32ToBuffer(x, buffer);
+  char buffer[absl::numbers_internal::kFastToBufferSize];
+  char* actual = absl::numbers_internal::FastIntToBuffer(x, buffer);
   std::string expected = std::to_string(x);
-  ASSERT_TRUE(expected == actual)
-      << "Expected \"" << expected << "\", Actual \"" << actual << "\", Input "
-      << x;
+  EXPECT_EQ(expected, std::string(buffer, actual)) << " Input " << x;
+
+  char* generic_actual = absl::numbers_internal::FastIntToBuffer(x, buffer);
+  EXPECT_EQ(expected, std::string(buffer, generic_actual)) << " Input " << x;
 }
 
 void CheckInt64(int64_t x) {
-  char buffer[kFastInt64ToBufferSize + 3];
+  char buffer[absl::numbers_internal::kFastToBufferSize + 3];
   buffer[0] = '*';
   buffer[23] = '*';
   buffer[24] = '*';
-  char* actual = FastInt64ToBuffer(x, &buffer[1]);
+  char* actual = absl::numbers_internal::FastIntToBuffer(x, &buffer[1]);
   std::string expected = std::to_string(x);
-  ASSERT_TRUE(expected == actual)
-      << "Expected \"" << expected << "\", Actual \"" << actual << "\", Input "
-      << x;
-  ASSERT_EQ(buffer[0], '*');
-  ASSERT_EQ(buffer[23], '*');
-  ASSERT_EQ(buffer[24], '*');
+  EXPECT_EQ(expected, std::string(&buffer[1], actual)) << " Input " << x;
+  EXPECT_EQ(buffer[0], '*');
+  EXPECT_EQ(buffer[23], '*');
+  EXPECT_EQ(buffer[24], '*');
+
+  char* my_actual =
+      absl::numbers_internal::FastIntToBuffer(MyInt64(x), &buffer[1]);
+  EXPECT_EQ(expected, std::string(&buffer[1], my_actual)) << " Input " << x;
 }
 
 void CheckUInt32(uint32_t x) {
-  char buffer[kFastUInt64ToBufferSize];
-  char* actual = FastUInt32ToBuffer(x, buffer);
+  char buffer[absl::numbers_internal::kFastToBufferSize];
+  char* actual = absl::numbers_internal::FastIntToBuffer(x, buffer);
   std::string expected = std::to_string(x);
-  ASSERT_TRUE(expected == actual)
-      << "Expected \"" << expected << "\", Actual \"" << actual << "\", Input "
-      << x;
+  EXPECT_EQ(expected, std::string(buffer, actual)) << " Input " << x;
+
+  char* generic_actual = absl::numbers_internal::FastIntToBuffer(x, buffer);
+  EXPECT_EQ(expected, std::string(buffer, generic_actual)) << " Input " << x;
 }
 
 void CheckUInt64(uint64_t x) {
-  char buffer[kFastUInt64ToBufferSize + 1];
-  char* actual = FastUInt64ToBuffer(x, &buffer[1]);
+  char buffer[absl::numbers_internal::kFastToBufferSize + 1];
+  char* actual = absl::numbers_internal::FastIntToBuffer(x, &buffer[1]);
   std::string expected = std::to_string(x);
-  ASSERT_TRUE(expected == actual)
-      << "Expected \"" << expected << "\", Actual \"" << actual << "\", Input "
-      << x;
+  EXPECT_EQ(expected, std::string(&buffer[1], actual)) << " Input " << x;
+
+  char* generic_actual = absl::numbers_internal::FastIntToBuffer(x, &buffer[1]);
+  EXPECT_EQ(expected, std::string(&buffer[1], generic_actual))
+      << " Input " << x;
+
+  char* my_actual =
+      absl::numbers_internal::FastIntToBuffer(MyUInt64(x), &buffer[1]);
+  EXPECT_EQ(expected, std::string(&buffer[1], my_actual)) << " Input " << x;
 }
 
 void CheckHex64(uint64_t v) {
-  char expected[kFastUInt64ToBufferSize];
+  char expected[16 + 1];
   std::string actual = absl::StrCat(absl::Hex(v, absl::kZeroPad16));
   snprintf(expected, sizeof(expected), "%016" PRIx64, static_cast<uint64_t>(v));
-  ASSERT_TRUE(expected == actual)
-      << "Expected \"" << expected << "\", Actual \"" << actual << "\"";
+  EXPECT_EQ(expected, actual) << " Input " << v;
 }
 
-void TestFastPrints() {
+TEST(Numbers, TestFastPrints) {
   for (int i = -100; i <= 100; i++) {
     CheckInt32(i);
     CheckInt64(i);
@@ -613,8 +654,8 @@ TEST(stringtest, safe_strtou64_random) {
 }
 
 TEST(stringtest, safe_strtou32_base) {
-  for (int i = 0; strtouint32_test_cases[i].str != nullptr; ++i) {
-    const auto& e = strtouint32_test_cases[i];
+  for (int i = 0; strtouint32_test_cases()[i].str != nullptr; ++i) {
+    const auto& e = strtouint32_test_cases()[i];
     uint32_t value;
     EXPECT_EQ(e.expect_ok, safe_strtou32_base(e.str, &value, e.base))
         << "str=\"" << e.str << "\" base=" << e.base;
@@ -626,8 +667,8 @@ TEST(stringtest, safe_strtou32_base) {
 }
 
 TEST(stringtest, safe_strtou32_base_length_delimited) {
-  for (int i = 0; strtouint32_test_cases[i].str != nullptr; ++i) {
-    const auto& e = strtouint32_test_cases[i];
+  for (int i = 0; strtouint32_test_cases()[i].str != nullptr; ++i) {
+    const auto& e = strtouint32_test_cases()[i];
     std::string tmp(e.str);
     tmp.append("12");  // Adds garbage at the end.
 
@@ -644,8 +685,8 @@ TEST(stringtest, safe_strtou32_base_length_delimited) {
 }
 
 TEST(stringtest, safe_strtou64_base) {
-  for (int i = 0; strtouint64_test_cases[i].str != nullptr; ++i) {
-    const auto& e = strtouint64_test_cases[i];
+  for (int i = 0; strtouint64_test_cases()[i].str != nullptr; ++i) {
+    const auto& e = strtouint64_test_cases()[i];
     uint64_t value;
     EXPECT_EQ(e.expect_ok, safe_strtou64_base(e.str, &value, e.base))
         << "str=\"" << e.str << "\" base=" << e.base;
@@ -656,8 +697,8 @@ TEST(stringtest, safe_strtou64_base) {
 }
 
 TEST(stringtest, safe_strtou64_base_length_delimited) {
-  for (int i = 0; strtouint64_test_cases[i].str != nullptr; ++i) {
-    const auto& e = strtouint64_test_cases[i];
+  for (int i = 0; strtouint64_test_cases()[i].str != nullptr; ++i) {
+    const auto& e = strtouint64_test_cases()[i];
     std::string tmp(e.str);
     tmp.append("12");  // Adds garbage at the end.
 
@@ -672,8 +713,9 @@ TEST(stringtest, safe_strtou64_base_length_delimited) {
   }
 }
 
-// feenableexcept() and fedisableexcept() are missing on Mac OS X, MSVC.
-#if defined(_MSC_VER) || defined(__APPLE__)
+// feenableexcept() and fedisableexcept() are missing on macOS, MSVC,
+// and WebAssembly.
+#if defined(_MSC_VER) || defined(__APPLE__) || defined(__EMSCRIPTEN__)
 #define ABSL_MISSING_FEENABLEEXCEPT 1
 #define ABSL_MISSING_FEDISABLEEXCEPT 1
 #endif
@@ -700,7 +742,7 @@ class SimpleDtoaTest : public testing::Test {
   }
 
   std::string ToNineDigits(double value) {
-    char buffer[kFastToBufferSize];  // more than enough for %.9g
+    char buffer[16];  // more than enough for %.9g
     snprintf(buffer, sizeof(buffer), "%.9g", value);
     return buffer;
   }
@@ -743,7 +785,7 @@ void ExhaustiveFloat(uint32_t cases, R&& runnable) {
   if (iters_per_float == 0) iters_per_float = 1;
   for (float f : floats) {
     if (f == last) continue;
-    float testf = nextafter(last, std::numeric_limits<float>::max());
+    float testf = std::nextafter(last, std::numeric_limits<float>::max());
     runnable(testf);
     runnable(-testf);
     last = testf;
@@ -757,7 +799,7 @@ void ExhaustiveFloat(uint32_t cases, R&& runnable) {
         last = testf;
       }
     }
-    testf = nextafter(f, 0.0f);
+    testf = std::nextafter(f, 0.0f);
     if (testf > last) {
       runnable(testf);
       runnable(-testf);
@@ -831,15 +873,15 @@ TEST_F(SimpleDtoaTest, ExhaustiveDoubleToSixDigits) {
     }
 
     for (int exponent = -324; exponent <= 308; ++exponent) {
-      double powten = pow(10.0, exponent);
+      double powten = absl::strings_internal::Pow10(exponent);
       if (powten == 0) powten = 5e-324;
       if (kFloatNumCases >= 1e9) {
         // The exhaustive test takes a very long time, so log progress.
         char buf[kSixDigitsToBufferSize];
         ABSL_RAW_LOG(
             INFO, "%s",
-            absl::StrCat("Exp ", exponent, " powten=", powten, "(",
-                         powten, ") (",
+            absl::StrCat("Exp ", exponent, " powten=", powten, "(", powten,
+                         ") (",
                          std::string(buf, SixDigitsToBuffer(powten, buf)), ")")
                 .c_str());
       }

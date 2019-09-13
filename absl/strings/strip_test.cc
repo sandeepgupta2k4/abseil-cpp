@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//      https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This file contains functions that remove a defined part from the std::string,
-// i.e., strip the std::string.
+// This file contains functions that remove a defined part from the string,
+// i.e., strip the string.
 
 #include "absl/strings/strip.h"
 
@@ -26,9 +26,6 @@
 #include "absl/strings/string_view.h"
 
 namespace {
-
-using testing::ElementsAre;
-using testing::IsEmpty;
 
 TEST(Strip, ConsumePrefixOneChar) {
   absl::string_view input("abc");
@@ -114,6 +111,88 @@ TEST(Strip, StripSuffix) {
   EXPECT_EQ(absl::StripSuffix("foobar", "foo"), "foobar");
   EXPECT_EQ(absl::StripSuffix("foobar", "ffoobar"), "foobar");
   EXPECT_EQ(absl::StripSuffix("", ""), "");
+}
+
+TEST(Strip, RemoveExtraAsciiWhitespace) {
+  const char* inputs[] = {
+      "No extra space",
+      "  Leading whitespace",
+      "Trailing whitespace  ",
+      "  Leading and trailing  ",
+      " Whitespace \t  in\v   middle  ",
+      "'Eeeeep!  \n Newlines!\n",
+      "nospaces",
+  };
+  const char* outputs[] = {
+      "No extra space",
+      "Leading whitespace",
+      "Trailing whitespace",
+      "Leading and trailing",
+      "Whitespace in middle",
+      "'Eeeeep! Newlines!",
+      "nospaces",
+  };
+  int NUM_TESTS = 7;
+
+  for (int i = 0; i < NUM_TESTS; i++) {
+    std::string s(inputs[i]);
+    absl::RemoveExtraAsciiWhitespace(&s);
+    EXPECT_STREQ(outputs[i], s.c_str());
+  }
+
+  // Test that absl::RemoveExtraAsciiWhitespace returns immediately for empty
+  // strings (It was adding the \0 character to the C++ std::string, which broke
+  // tests involving empty())
+  std::string zero_string = "";
+  assert(zero_string.empty());
+  absl::RemoveExtraAsciiWhitespace(&zero_string);
+  EXPECT_EQ(zero_string.size(), 0);
+  EXPECT_TRUE(zero_string.empty());
+}
+
+TEST(Strip, StripTrailingAsciiWhitespace) {
+  std::string test = "foo  ";
+  absl::StripTrailingAsciiWhitespace(&test);
+  EXPECT_EQ(test, "foo");
+
+  test = "   ";
+  absl::StripTrailingAsciiWhitespace(&test);
+  EXPECT_EQ(test, "");
+
+  test = "";
+  absl::StripTrailingAsciiWhitespace(&test);
+  EXPECT_EQ(test, "");
+
+  test = " abc\t";
+  absl::StripTrailingAsciiWhitespace(&test);
+  EXPECT_EQ(test, " abc");
+}
+
+TEST(String, StripLeadingAsciiWhitespace) {
+  absl::string_view orig = "\t  \n\f\r\n\vfoo";
+  EXPECT_EQ("foo", absl::StripLeadingAsciiWhitespace(orig));
+  orig = "\t  \n\f\r\v\n\t  \n\f\r\v\n";
+  EXPECT_EQ(absl::string_view(), absl::StripLeadingAsciiWhitespace(orig));
+}
+
+TEST(Strip, StripAsciiWhitespace) {
+  std::string test2 = "\t  \f\r\n\vfoo \t\f\r\v\n";
+  absl::StripAsciiWhitespace(&test2);
+  EXPECT_EQ(test2, "foo");
+  std::string test3 = "bar";
+  absl::StripAsciiWhitespace(&test3);
+  EXPECT_EQ(test3, "bar");
+  std::string test4 = "\t  \f\r\n\vfoo";
+  absl::StripAsciiWhitespace(&test4);
+  EXPECT_EQ(test4, "foo");
+  std::string test5 = "foo \t\f\r\v\n";
+  absl::StripAsciiWhitespace(&test5);
+  EXPECT_EQ(test5, "foo");
+  absl::string_view test6("\t  \f\r\n\vfoo \t\f\r\v\n");
+  test6 = absl::StripAsciiWhitespace(test6);
+  EXPECT_EQ(test6, "foo");
+  test6 = absl::StripAsciiWhitespace(test6);
+  EXPECT_EQ(test6, "foo");  // already stripped
 }
 
 }  // namespace

@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//      https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,13 +17,13 @@
 #include <algorithm>
 #include <limits>
 #include <random>
-#include <sstream>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "gtest/gtest.h"
 #include "absl/base/internal/cycleclock.h"
+#include "absl/hash/hash_testing.h"
 #include "absl/meta/type_traits.h"
 
 #if defined(_MSC_VER) && _MSC_VER == 1900
@@ -51,7 +51,7 @@ template <typename T>
 class Uint128FloatTraitsTest : public ::testing::Test {};
 typedef ::testing::Types<float, double, long double> FloatingPointTypes;
 
-TYPED_TEST_CASE(Uint128IntegerTraitsTest, IntegerTypes);
+TYPED_TEST_SUITE(Uint128IntegerTraitsTest, IntegerTypes);
 
 TYPED_TEST(Uint128IntegerTraitsTest, ConstructAssignTest) {
   static_assert(std::is_constructible<absl::uint128, TypeParam>::value,
@@ -62,7 +62,7 @@ TYPED_TEST(Uint128IntegerTraitsTest, ConstructAssignTest) {
                 "TypeParam must not be assignable from absl::uint128");
 }
 
-TYPED_TEST_CASE(Uint128FloatTraitsTest, FloatingPointTypes);
+TYPED_TEST_SUITE(Uint128FloatTraitsTest, FloatingPointTypes);
 
 TYPED_TEST(Uint128FloatTraitsTest, ConstructAssignTest) {
   static_assert(std::is_constructible<absl::uint128, TypeParam>::value,
@@ -93,6 +93,15 @@ TEST(Uint128, IntrinsicTypeTraitsTest) {
 }
 #endif  // ABSL_HAVE_INTRINSIC_INT128
 
+TEST(Uint128, TrivialTraitsTest) {
+  static_assert(absl::is_trivially_default_constructible<absl::uint128>::value,
+                "");
+  static_assert(absl::is_trivially_copy_constructible<absl::uint128>::value,
+                "");
+  static_assert(absl::is_trivially_copy_assignable<absl::uint128>::value, "");
+  static_assert(std::is_trivially_destructible<absl::uint128>::value, "");
+}
+
 TEST(Uint128, AllTests) {
   absl::uint128 zero = 0;
   absl::uint128 one = 1;
@@ -102,7 +111,7 @@ TEST(Uint128, AllTests) {
   absl::uint128 big = absl::MakeUint128(2000, 2);
   absl::uint128 big_minus_one = absl::MakeUint128(2000, 1);
   absl::uint128 bigger = absl::MakeUint128(2001, 1);
-  absl::uint128 biggest = absl::kuint128max;
+  absl::uint128 biggest = absl::Uint128Max();
   absl::uint128 high_low = absl::MakeUint128(1, 0);
   absl::uint128 low_high =
       absl::MakeUint128(0, std::numeric_limits<uint64_t>::max());
@@ -167,8 +176,8 @@ TEST(Uint128, AllTests) {
   big_copy = big;
   EXPECT_EQ(big >> 73, big_copy >>= 73);
 
-  EXPECT_EQ(Uint128High64(biggest), std::numeric_limits<uint64_t>::max());
-  EXPECT_EQ(Uint128Low64(biggest), std::numeric_limits<uint64_t>::max());
+  EXPECT_EQ(absl::Uint128High64(biggest), std::numeric_limits<uint64_t>::max());
+  EXPECT_EQ(absl::Uint128Low64(biggest), std::numeric_limits<uint64_t>::max());
   EXPECT_EQ(zero + one, one);
   EXPECT_EQ(one + one, two);
   EXPECT_EQ(big_minus_one + one, big);
@@ -182,8 +191,8 @@ TEST(Uint128, AllTests) {
   EXPECT_EQ(zero - 1, biggest);
   EXPECT_EQ(high_low - one, low_high);
   EXPECT_EQ(low_high + one, high_low);
-  EXPECT_EQ(Uint128High64((absl::uint128(1) << 64) - 1), 0);
-  EXPECT_EQ(Uint128Low64((absl::uint128(1) << 64) - 1),
+  EXPECT_EQ(absl::Uint128High64((absl::uint128(1) << 64) - 1), 0);
+  EXPECT_EQ(absl::Uint128Low64((absl::uint128(1) << 64) - 1),
             std::numeric_limits<uint64_t>::max());
   EXPECT_TRUE(!!one);
   EXPECT_TRUE(!!high_low);
@@ -219,8 +228,10 @@ TEST(Uint128, AllTests) {
 
   EXPECT_EQ(big, -(-big));
   EXPECT_EQ(two, -((-one) - 1));
-  EXPECT_EQ(absl::kuint128max, -one);
+  EXPECT_EQ(absl::Uint128Max(), -one);
   EXPECT_EQ(zero, -zero);
+
+  EXPECT_EQ(absl::Uint128Max(), absl::kuint128max);
 }
 
 TEST(Uint128, ConversionTests) {
@@ -260,6 +271,20 @@ TEST(Uint128, ConversionTests) {
   EXPECT_EQ(static_cast<absl::uint128>(round_to_zero), 0);
   EXPECT_EQ(static_cast<absl::uint128>(round_to_five), 5);
   EXPECT_EQ(static_cast<absl::uint128>(round_to_nine), 9);
+
+  absl::uint128 highest_precision_in_long_double =
+      ~absl::uint128{} >> (128 - std::numeric_limits<long double>::digits);
+  EXPECT_EQ(highest_precision_in_long_double,
+            static_cast<absl::uint128>(
+                static_cast<long double>(highest_precision_in_long_double)));
+  // Apply a mask just to make sure all the bits are the right place.
+  const absl::uint128 arbitrary_mask =
+      absl::MakeUint128(0xa29f622677ded751, 0xf8ca66add076f468);
+  EXPECT_EQ(highest_precision_in_long_double & arbitrary_mask,
+            static_cast<absl::uint128>(static_cast<long double>(
+                highest_precision_in_long_double & arbitrary_mask)));
+
+  EXPECT_EQ(static_cast<absl::uint128>(-0.1L), 0);
 }
 
 TEST(Uint128, OperatorAssignReturnRef) {
@@ -418,75 +443,40 @@ TEST(Uint128, ConstexprTest) {
   EXPECT_EQ(minus_two, absl::MakeUint128(-1, -2));
 }
 
-TEST(Uint128, Traits) {
-  EXPECT_TRUE(absl::is_trivially_copy_constructible<absl::uint128>::value);
-  EXPECT_TRUE(absl::is_trivially_copy_assignable<absl::uint128>::value);
-  EXPECT_TRUE(std::is_trivially_destructible<absl::uint128>::value);
+TEST(Uint128, NumericLimitsTest) {
+  static_assert(std::numeric_limits<absl::uint128>::is_specialized, "");
+  static_assert(!std::numeric_limits<absl::uint128>::is_signed, "");
+  static_assert(std::numeric_limits<absl::uint128>::is_integer, "");
+  EXPECT_EQ(static_cast<int>(128 * std::log10(2)),
+            std::numeric_limits<absl::uint128>::digits10);
+  EXPECT_EQ(0, std::numeric_limits<absl::uint128>::min());
+  EXPECT_EQ(0, std::numeric_limits<absl::uint128>::lowest());
+  EXPECT_EQ(absl::Uint128Max(), std::numeric_limits<absl::uint128>::max());
 }
 
-TEST(Uint128, OStream) {
-  struct {
-    absl::uint128 val;
-    std::ios_base::fmtflags flags;
-    std::streamsize width;
-    char fill;
-    const char* rep;
-  } cases[] = {
-      // zero with different bases
-      {absl::uint128(0), std::ios::dec, 0, '_', "0"},
-      {absl::uint128(0), std::ios::oct, 0, '_', "0"},
-      {absl::uint128(0), std::ios::hex, 0, '_', "0"},
-      // crossover between lo_ and hi_
-      {absl::MakeUint128(0, -1), std::ios::dec, 0, '_', "18446744073709551615"},
-      {absl::MakeUint128(0, -1), std::ios::oct, 0, '_',
-       "1777777777777777777777"},
-      {absl::MakeUint128(0, -1), std::ios::hex, 0, '_', "ffffffffffffffff"},
-      {absl::MakeUint128(1, 0), std::ios::dec, 0, '_', "18446744073709551616"},
-      {absl::MakeUint128(1, 0), std::ios::oct, 0, '_',
-       "2000000000000000000000"},
-      {absl::MakeUint128(1, 0), std::ios::hex, 0, '_', "10000000000000000"},
-      // just the top bit
-      {absl::MakeUint128(0x8000000000000000, 0), std::ios::dec, 0, '_',
-       "170141183460469231731687303715884105728"},
-      {absl::MakeUint128(0x8000000000000000, 0), std::ios::oct, 0, '_',
-       "2000000000000000000000000000000000000000000"},
-      {absl::MakeUint128(0x8000000000000000, 0), std::ios::hex, 0, '_',
-       "80000000000000000000000000000000"},
-      // maximum absl::uint128 value
-      {absl::MakeUint128(-1, -1), std::ios::dec, 0, '_',
-       "340282366920938463463374607431768211455"},
-      {absl::MakeUint128(-1, -1), std::ios::oct, 0, '_',
-       "3777777777777777777777777777777777777777777"},
-      {absl::MakeUint128(-1, -1), std::ios::hex, 0, '_',
-       "ffffffffffffffffffffffffffffffff"},
-      // uppercase
-      {absl::MakeUint128(-1, -1), std::ios::hex | std::ios::uppercase, 0, '_',
-       "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"},
-      // showbase
-      {absl::uint128(1), std::ios::dec | std::ios::showbase, 0, '_', "1"},
-      {absl::uint128(1), std::ios::oct | std::ios::showbase, 0, '_', "01"},
-      {absl::uint128(1), std::ios::hex | std::ios::showbase, 0, '_', "0x1"},
-      // showbase does nothing on zero
-      {absl::uint128(0), std::ios::dec | std::ios::showbase, 0, '_', "0"},
-      {absl::uint128(0), std::ios::oct | std::ios::showbase, 0, '_', "0"},
-      {absl::uint128(0), std::ios::hex | std::ios::showbase, 0, '_', "0"},
-      // showpos does nothing on unsigned types
-      {absl::uint128(1), std::ios::dec | std::ios::showpos, 0, '_', "1"},
-      // padding
-      {absl::uint128(9), std::ios::dec, 6, '_', "_____9"},
-      {absl::uint128(12345), std::ios::dec, 6, '_', "_12345"},
-      // left adjustment
-      {absl::uint128(9), std::ios::dec | std::ios::left, 6, '_', "9_____"},
-      {absl::uint128(12345), std::ios::dec | std::ios::left, 6, '_', "12345_"},
-  };
-  for (const auto& test_case : cases) {
-    std::ostringstream os;
-    os.flags(test_case.flags);
-    os.width(test_case.width);
-    os.fill(test_case.fill);
-    os << test_case.val;
-    EXPECT_EQ(test_case.rep, os.str());
-  }
+TEST(Uint128, Hash) {
+  EXPECT_TRUE(absl::VerifyTypeImplementsAbslHashCorrectly({
+      // Some simple values
+      absl::uint128{0},
+      absl::uint128{1},
+      ~absl::uint128{},
+      // 64 bit limits
+      absl::uint128{std::numeric_limits<int64_t>::max()},
+      absl::uint128{std::numeric_limits<uint64_t>::max()} + 0,
+      absl::uint128{std::numeric_limits<uint64_t>::max()} + 1,
+      absl::uint128{std::numeric_limits<uint64_t>::max()} + 2,
+      // Keeping high same
+      absl::uint128{1} << 62,
+      absl::uint128{1} << 63,
+      // Keeping low same
+      absl::uint128{1} << 64,
+      absl::uint128{1} << 65,
+      // 128 bit limits
+      std::numeric_limits<absl::uint128>::max(),
+      std::numeric_limits<absl::uint128>::max() - 1,
+      std::numeric_limits<absl::uint128>::min() + 1,
+      std::numeric_limits<absl::uint128>::min(),
+  }));
 }
 
 }  // namespace

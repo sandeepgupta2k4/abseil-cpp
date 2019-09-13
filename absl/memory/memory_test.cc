@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//      https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -67,6 +67,45 @@ TEST(MakeUniqueTest, Basic) {
   EXPECT_EQ("", *p);
   p = absl::make_unique<std::string>("hi");
   EXPECT_EQ("hi", *p);
+}
+
+// InitializationVerifier fills in a pattern when allocated so we can
+// distinguish between its default and value initialized states (without
+// accessing truly uninitialized memory).
+struct InitializationVerifier {
+  static constexpr int kDefaultScalar = 0x43;
+  static constexpr int kDefaultArray = 0x4B;
+
+  static void* operator new(size_t n) {
+    void* ret = ::operator new(n);
+    memset(ret, kDefaultScalar, n);
+    return ret;
+  }
+
+  static void* operator new[](size_t n) {
+    void* ret = ::operator new[](n);
+    memset(ret, kDefaultArray, n);
+    return ret;
+  }
+
+  int a;
+  int b;
+};
+
+TEST(Initialization, MakeUnique) {
+  auto p = absl::make_unique<InitializationVerifier>();
+
+  EXPECT_EQ(0, p->a);
+  EXPECT_EQ(0, p->b);
+}
+
+TEST(Initialization, MakeUniqueArray) {
+  auto p = absl::make_unique<InitializationVerifier[]>(2);
+
+  EXPECT_EQ(0, p[0].a);
+  EXPECT_EQ(0, p[0].b);
+  EXPECT_EQ(0, p[1].a);
+  EXPECT_EQ(0, p[1].b);
 }
 
 struct MoveOnly {
@@ -138,8 +177,17 @@ TEST(Make_UniqueTest, Array) {
   EXPECT_THAT(ArrayWatch::allocs(), ElementsAre(5 * sizeof(ArrayWatch)));
 }
 
+TEST(Make_UniqueTest, NotAmbiguousWithStdMakeUnique) {
+  // Ensure that absl::make_unique is not ambiguous with std::make_unique.
+  // In C++14 mode, the below call to make_unique has both types as candidates.
+  struct TakesStdType {
+    explicit TakesStdType(const std::vector<int> &vec) {}
+  };
+  using absl::make_unique;
+  (void)make_unique<TakesStdType>(std::vector<int>());
+}
+
 #if 0
-// TODO(billydonahue): Make a proper NC test.
 // These tests shouldn't compile.
 TEST(MakeUniqueTestNC, AcceptMoveOnlyLvalue) {
   auto m = MoveOnly();
@@ -429,6 +477,20 @@ TEST(AllocatorTraits, Typedefs) {
 }
 
 template <typename T>
+struct AllocWithPrivateInheritance : private std::allocator<T> {
+  using value_type = T;
+};
+
+TEST(AllocatorTraits, RebindWithPrivateInheritance) {
+  // Regression test for some versions of gcc that do not like the sfinae we
+  // used in combination with private inheritance.
+  EXPECT_TRUE(
+      (std::is_same<AllocWithPrivateInheritance<int>,
+                    absl::allocator_traits<AllocWithPrivateInheritance<char>>::
+                        rebind_alloc<int>>::value));
+}
+
+template <typename T>
 struct Rebound {};
 
 struct AllocWithRebind {
@@ -558,7 +620,7 @@ TEST(AllocatorTraits, FunctionsFull) {
 }
 
 TEST(AllocatorNoThrowTest, DefaultAllocator) {
-#if ABSL_ALLOCATOR_NOTHROW
+#if defined(ABSL_ALLOCATOR_NOTHROW) && ABSL_ALLOCATOR_NOTHROW
   EXPECT_TRUE(absl::default_allocator_is_nothrow::value);
 #else
   EXPECT_FALSE(absl::default_allocator_is_nothrow::value);
@@ -566,7 +628,7 @@ TEST(AllocatorNoThrowTest, DefaultAllocator) {
 }
 
 TEST(AllocatorNoThrowTest, StdAllocator) {
-#if ABSL_ALLOCATOR_NOTHROW
+#if defined(ABSL_ALLOCATOR_NOTHROW) && ABSL_ALLOCATOR_NOTHROW
   EXPECT_TRUE(absl::allocator_is_nothrow<std::allocator<int>>::value);
 #else
   EXPECT_FALSE(absl::allocator_is_nothrow<std::allocator<int>>::value);

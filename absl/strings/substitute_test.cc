@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//      https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,6 +15,7 @@
 #include "absl/strings/substitute.h"
 
 #include <cstdint>
+#include <vector>
 
 #include "gtest/gtest.h"
 #include "absl/strings/str_cat.h"
@@ -43,11 +44,35 @@ TEST(SubstituteTest, Substitute) {
           -1234567890, 3234567890U, -1234567890L, 3234567890UL,
           -int64_t{1234567890123456789}, uint64_t{9234567890123456789u}));
 
+  // Hex format
+  EXPECT_EQ("0 1 f ffff0ffff 0123456789abcdef",
+            absl::Substitute("$0$1$2$3$4 $5",  //
+                             absl::Hex(0), absl::Hex(1, absl::kSpacePad2),
+                             absl::Hex(0xf, absl::kSpacePad2),
+                             absl::Hex(int16_t{-1}, absl::kSpacePad5),
+                             absl::Hex(int16_t{-1}, absl::kZeroPad5),
+                             absl::Hex(0x123456789abcdef, absl::kZeroPad16)));
+
+  // Dec format
+  EXPECT_EQ("0 115   -1-0001 81985529216486895",
+            absl::Substitute("$0$1$2$3$4 $5",  //
+                             absl::Dec(0), absl::Dec(1, absl::kSpacePad2),
+                             absl::Dec(0xf, absl::kSpacePad2),
+                             absl::Dec(int16_t{-1}, absl::kSpacePad5),
+                             absl::Dec(int16_t{-1}, absl::kZeroPad5),
+                             absl::Dec(0x123456789abcdef, absl::kZeroPad16)));
+
   // Pointer.
   const int* int_p = reinterpret_cast<const int*>(0x12345);
   std::string str = absl::Substitute("$0", int_p);
-  EXPECT_EQ(absl::StrCat("0x", absl::Hex(reinterpret_cast<intptr_t>(int_p))),
-            str);
+  EXPECT_EQ(absl::StrCat("0x", absl::Hex(int_p)), str);
+
+  // Volatile Pointer.
+  // Like C++ streamed I/O, such pointers implicitly become bool
+  volatile int vol = 237;
+  volatile int *volatile volptr = &vol;
+  str = absl::Substitute("$0", volptr);
+  EXPECT_EQ("true", str);
 
   // null is special. StrCat prints 0x0. Substitute prints NULL.
   const uint64_t* null_p = nullptr;
@@ -146,6 +171,17 @@ TEST(SubstituteTest, SubstituteAndAppend) {
   absl::SubstituteAndAppend(&str, "$0 $1 $2 $3 $4 $5 $6 $7 $8 $9", "a", "b",
                             "c", "d", "e", "f", "g", "h", "i", "j");
   EXPECT_EQ("a b c d e f g h i j", str);
+}
+
+TEST(SubstituteTest, VectorBoolRef) {
+  std::vector<bool> v = {true, false};
+  const auto& cv = v;
+  EXPECT_EQ("true false true false",
+            absl::Substitute("$0 $1 $2 $3", v[0], v[1], cv[0], cv[1]));
+
+  std::string str = "Logic be like: ";
+  absl::SubstituteAndAppend(&str, "$0 $1 $2 $3", v[0], v[1], cv[0], cv[1]);
+  EXPECT_EQ("Logic be like: true false true false", str);
 }
 
 #ifdef GTEST_HAS_DEATH_TEST

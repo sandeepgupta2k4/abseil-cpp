@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//      https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,8 @@
 // limitations under the License.
 
 #include "absl/base/internal/sysinfo.h"
+
+#include "absl/base/attributes.h"
 
 #ifdef _WIN32
 #include <shlwapi.h>
@@ -29,8 +31,12 @@
 #include <sys/syscall.h>
 #endif
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__FreeBSD__)
 #include <sys/sysctl.h>
+#endif
+
+#if defined(__myriad2__)
+#include <rtems.h>
 #endif
 
 #include <string.h>
@@ -282,6 +288,38 @@ pid_t GetTID() {
 
 pid_t GetTID() {
   return syscall(SYS_gettid);
+}
+
+#elif defined(__akaros__)
+
+pid_t GetTID() {
+  // Akaros has a concept of "vcore context", which is the state the program
+  // is forced into when we need to make a user-level scheduling decision, or
+  // run a signal handler.  This is analogous to the interrupt context that a
+  // CPU might enter if it encounters some kind of exception.
+  //
+  // There is no current thread context in vcore context, but we need to give
+  // a reasonable answer if asked for a thread ID (e.g., in a signal handler).
+  // Thread 0 always exists, so if we are in vcore context, we return that.
+  //
+  // Otherwise, we know (since we are using pthreads) that the uthread struct
+  // current_uthread is pointing to is the first element of a
+  // struct pthread_tcb, so we extract and return the thread ID from that.
+  //
+  // TODO(dcross): Akaros anticipates moving the thread ID to the uthread
+  // structure at some point. We should modify this code to remove the cast
+  // when that happens.
+  if (in_vcore_context())
+    return 0;
+  return reinterpret_cast<struct pthread_tcb *>(current_uthread)->id;
+}
+
+#elif defined(__myriad2__)
+
+pid_t GetTID() {
+  uint32_t tid;
+  rtems_task_ident(RTEMS_SELF, 0, &tid);
+  return tid;
 }
 
 #else

@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//      https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -231,6 +231,11 @@ bool Mutex::LockWhenWithTimeout(const Condition& cond, absl::Duration timeout) {
       cond, synchronization_internal::DeadlineFromTimeout(timeout));
 }
 
+void Mutex::ReaderLockWhen(const Condition& cond) {
+  ReaderLock();
+  Await(cond);
+}
+
 bool Mutex::ReaderLockWhenWithTimeout(const Condition& cond,
                                       absl::Duration timeout) {
   return LockWhenWithTimeout(cond, timeout);
@@ -307,5 +312,7 @@ bool Condition::Eval() const {
   // eval_ == null for kTrue
   return (this->eval_ == nullptr) || (*this->eval_)(this);
 }
+
+void RegisterSymbolizer(bool (*)(const void*, char*, int)) {}
 
 }  // namespace absl

@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//      https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "absl/base/attributes.h"
 #include "absl/base/internal/low_level_scheduling.h"
 #include "absl/base/internal/scheduling_mode.h"
 #include "absl/base/internal/spinlock.h"
@@ -154,7 +155,8 @@ TEST(SpinLock, WaitCyclesEncoding) {
 
   // Test corner cases
   int64_t start_time = time_distribution(generator);
-  EXPECT_EQ(0, SpinLockTest::EncodeWaitCycles(start_time, start_time));
+  EXPECT_EQ(kSpinLockSleeper,
+            SpinLockTest::EncodeWaitCycles(start_time, start_time));
   EXPECT_EQ(0, SpinLockTest::DecodeWaitCycles(0));
   EXPECT_EQ(0, SpinLockTest::DecodeWaitCycles(kLockwordReservedMask));
   EXPECT_EQ(kMaxCycles & ~kProfileTimestampMask,
